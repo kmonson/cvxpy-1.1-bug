@@ -7,7 +7,6 @@ import datetime
 import os
 from pathlib import Path
 from pprint import pformat
-import time
 from typing import Any, Dict
 
 import cvxpy
@@ -58,17 +57,7 @@ class DAEnergyTimeShift:
 
     def objective_function(self, variables: Dict[str, Any],
                            generation: cvxpy.Variable, annuity_scalar: float = 1.0) -> Dict[str, Any]:
-        """Generate the full objective function, including optimization variables.
 
-        :param variables: dictionary of variables being optimized
-        :param generation: sum of generation within the system
-        :param annuity_scalar: scalar value to be multiplied by any yearly
-                cost or benefit that helps capture the cost/benefit over the
-                entire project lifetime (only to be set if sizing)
-
-        :return: expression of the objective function that it affects.
-                This can be passed into the cvxpy solver.
-        """
         p_da = cvxpy.Parameter(self.price.index.size, name='da price', value=[i[0] for i in self.price.values])
         return {'DA ETS': cvxpy.sum(-p_da @ variables['dis'] + p_da @ variables['ch'] -
                                     p_da @ generation) * annuity_scalar * self.dt}
@@ -80,15 +69,7 @@ class PVGen:
         self.inv_max = pv_capacity
 
     def objective_constraints(self, variables: Dict[str, Any], mask: pd.Series) -> list:
-        """Build the master constraints for the timeseries data being optimized.
-
-        :param variables: dictionary of variables being optimized
-        :param mask: boolean series that is true for indices corresponding to
-                time_series data included in the subs data set
-
-        :return: list of constraints that correspond to the battery's physical
-                constraints and its service constraints
-        """
+        # For this test mask is all true and no filtering takes place
         constraints = [
             cvxpy.NonPos(variables['pv_out'] - self.generation[mask]),
             cvxpy.NonPos(variables['ch'] - variables['pv_out']),
@@ -113,18 +94,6 @@ class BESS:
 
     def objective_constraints(self, variables: Dict[str, Any],
                               mask: pd.Series, reservations: Dict[str, Any]) -> list:
-        """Build the master constraint list for the subset of timeseries data being optimized.
-
-        :param variables: dictionary of variables being optimized
-        :param mask: boolean series that is true for indices corresponding to
-                time_series data included in the subs data set
-        :param reservations: dictionary of energy and power reservations
-                required by the services being preformed with the current
-                optimization subset
-
-        :return: list of constraints that corresponds the battery's physical
-                constraints and its service constraints
-        """
         ene_target = self.soc_target * self.ulsoc * self.ene_max_rated
 
         # optimization variables
@@ -135,6 +104,8 @@ class BESS:
         on_d = variables['on_d']
 
         # create cvx parameters of control constraints (this improves readability in cvx costs and better handling)
+        # For this test mask is all true and no filtering takes place
+        # also size is always 8760
         size = int(np.sum(mask))
         ene_max = cvxpy.Parameter(size, name='ene_max', value=np.full((size,), self.ulsoc * self.ene_max_rated))
         ene_min = cvxpy.Parameter(size, name='ene_min', value=np.full((size,), self.llsoc * self.ene_max_rated))
@@ -178,9 +149,7 @@ class BESS:
             cvxpy.NonPos(cvxpy.multiply(dis_min, on_d) - dis + reservations['D_min']),
         ]
 
-        # The constraint below limits energy throughput and total discharge to less than or equal to
-        # (number of cycles * energy capacity) per day, for technology warranty purposes
-        # this constraint only applies when optimization window is equal to or greater than 24 hours
+        # For this test mask is all true and no filtering takes place
         days = mask.loc[mask].index.dayofyear
         constraints.extend(
             cvxpy.NonPos(cvxpy.sum(dis[day_mask] * self.dt + cvxpy.pos(e_res[day_mask])) -
@@ -200,13 +169,9 @@ class StorageSolver:
 
     def optimization_problem(self, year: int, pv_total_plant: pd.DataFrame, pv_ac_plant: pd.Series,
                              power_capacity: float, energy_capacity: float) -> pd.DataFrame:
-        """ Sets up and runs optimization on a subset of data. Called within a loop.
-
-        :return: optimal dispatch variables for each timestep in optimization period.
-        """
-        # Mask should be a series with length == optimization window
+        # For this test mask is all True
         mask: pd.Series = pv_total_plant > -200
-        # Assuming full year window
+        # For this test size is always 8760
         size = int(np.sum(mask))
 
         ##########################################################################
@@ -281,21 +246,8 @@ class StorageSolver:
         problem_data = prob.get_problem_data(CVXPY_SOLVER)
         write_test_data("problem_data", problem_data)
 
-        start = time.perf_counter()
-        prob.solve(solver=CVXPY_SOLVER, verbose=CVXPY_VERBOSE)  # Allow user to specify solver
-        end = time.perf_counter()
-        if CVXPY_VERBOSE:
-            print(f'{CVXPY_SOLVER or "Default"} solver finished in {end - start} seconds.')
-            print('Optimization problem was', prob.status)
-        if prob.status.split(maxsplit=1)[0] != 'optimal':
-            raise cvxpy.SolverError(f'Problem is {prob.status}; no solution found')
-
-        ################################################
-        # POST-OPTIMIZATION: COLLECT RESULTS TO RETURN #
-        ################################################
-
-        variable_values = pd.DataFrame({name: value.value for name, value in variables.items()}, index=mask.index)
-        return variable_values
+        prob.solve(solver=CVXPY_SOLVER, verbose=CVXPY_VERBOSE)
+        print('Optimization problem was', prob.status)
 
 
 if __name__ == "__main__":
@@ -305,6 +257,6 @@ if __name__ == "__main__":
     cod = datetime.date(2021, 3, 1)
     curve = pd.read_csv("curve.csv")
     solver = StorageSolver(cod, curve)
-    solution = solver.optimization_problem(0, data, data, 100, 400)
+    solver.optimization_problem(0, data, data, 100, 400)
 
 
