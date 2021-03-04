@@ -57,7 +57,7 @@ class DAEnergyTimeShift:
         self.price = price
 
     def objective_function(self, variables: Dict[str, Any],
-                           generation: cvxpy.Variable = None, annuity_scalar: float = 1.0) -> Dict[str, Any]:
+                           generation: cvxpy.Variable, annuity_scalar: float = 1.0) -> Dict[str, Any]:
         """Generate the full objective function, including optimization variables.
 
         :param variables: dictionary of variables being optimized
@@ -70,19 +70,14 @@ class DAEnergyTimeShift:
                 This can be passed into the cvxpy solver.
         """
         p_da = cvxpy.Parameter(self.price.index.size, name='da price', value=[i[0] for i in self.price.values])
-        if generation:
-            return {'DA ETS': cvxpy.sum(-p_da @ variables['dis'] + p_da @ variables['ch'] -
-                                        p_da @ generation) * annuity_scalar * self.dt}
-        else:
-            return {'DA ETS': cvxpy.sum(-p_da @ variables['dis'] + p_da @ variables['ch']) * annuity_scalar * self.dt}
+        return {'DA ETS': cvxpy.sum(-p_da @ variables['dis'] + p_da @ variables['ch'] -
+                                    p_da @ generation) * annuity_scalar * self.dt}
 
 
 class PVGen:
-    def __init__(self, pv_prod: pd.Series, pv_capacity: float, grid_charge: bool) -> None:
+    def __init__(self, pv_prod: pd.Series, pv_capacity: float) -> None:
         self.generation = pv_prod
         self.inv_max = pv_capacity
-        self.grid_charge = grid_charge
-        # self.loc = 'ac'
 
     def objective_constraints(self, variables: Dict[str, Any], mask: pd.Series) -> list:
         """Build the master constraints for the timeseries data being optimized.
@@ -94,10 +89,9 @@ class PVGen:
         :return: list of constraints that correspond to the battery's physical
                 constraints and its service constraints
         """
-        constraints = [cvxpy.NonPos(variables['pv_out'] - self.generation[mask])]
-        if not self.grid_charge:
-            constraints += [cvxpy.NonPos(variables['ch'] - variables['pv_out'])]
-        constraints += [
+        constraints = [
+            cvxpy.NonPos(variables['pv_out'] - self.generation[mask]),
+            cvxpy.NonPos(variables['ch'] - variables['pv_out']),
             cvxpy.NonPos(variables['pv_out'] - self.inv_max),
             cvxpy.NonPos(-self.inv_max - variables['pv_out']),
         ]
@@ -201,7 +195,6 @@ class StorageSolver:
         self.curve = curve
         self.daily_cycle_limit = 2.0
         self.dt = 1.0
-        self.grid_charge = False
         self.soc_target = 0.0
         self.rte = 0.87
 
@@ -261,7 +254,7 @@ class StorageSolver:
 
         write_test_data("expression", expression)
 
-        pv = PVGen(pv_ac_plant, round(max(pv_ac_plant), 0), self.grid_charge)
+        pv = PVGen(pv_ac_plant, round(max(pv_ac_plant), 0))
         bess = BESS(power_capacity, energy_capacity, self.rte,
                     self.daily_cycle_limit, self.dt, self.soc_target)
         constraints = [
