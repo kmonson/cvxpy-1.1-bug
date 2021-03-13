@@ -71,10 +71,10 @@ class PVGen:
     def objective_constraints(self, variables: Dict[str, Any], mask: pd.Series) -> list:
         # For this test mask is all true and no filtering takes place
         constraints = [
-            cvxpy.NonPos(variables['pv_out'] - self.generation[mask]),
-            cvxpy.NonPos(variables['ch'] - variables['pv_out']),
-            cvxpy.NonPos(variables['pv_out'] - self.inv_max),
-            cvxpy.NonPos(-self.inv_max - variables['pv_out']),
+            variables['pv_out'] - self.generation[mask] <= 0,
+            variables['ch'] - variables['pv_out'] <= 0,
+            variables['pv_out'] - self.inv_max <= 0,
+            -self.inv_max - variables['pv_out'] <= 0,
         ]
         return constraints
 
@@ -117,43 +117,39 @@ class BESS:
         # energy at the end of the last time step (makes sure that the end of the last time step is ENE_TARGET
         e_res = reservations['E']
         constraints = [
-            cvxpy.Zero((ene_target - ene[-1]) - (self.dt * ch[-1] * self.rte) + (self.dt * dis[-1]) - e_res[-1]),
+            (ene_target - ene[-1]) - (self.dt * ch[-1] * self.rte) + (self.dt * dis[-1]) - e_res[-1] == 0,
 
             # energy generally for every time step
-            cvxpy.Zero(ene[1:] - ene[:-1] - (self.dt * ch[:-1] * self.rte) + (self.dt * dis[:-1]) - e_res[:-1]),
+            ene[1:] - ene[:-1] - (self.dt * ch[:-1] * self.rte) + (self.dt * dis[:-1]) - e_res[:-1] == 0,
 
             # energy at the beginning of the optimization window -- handles rolling window
-            cvxpy.Zero(ene[0] - ene_target),
+            ene[0] - ene_target == 0,
 
             # Keep energy in bounds determined in the constraints configuration function
             # making sure our storage meets control constraints
-            cvxpy.NonPos(ene_target - ene_max[-1] + reservations['E_upper'][-1] - variables['ene_max_slack'][-1]),
-            cvxpy.NonPos(ene[:-1] - ene_max[:-1] + reservations['E_upper'][:-1] - variables['ene_max_slack'][:-1]),
-
-            cvxpy.NonPos(-ene_target + ene_min[-1] + reservations['E_lower'][-1] - variables['ene_min_slack'][-1]),
-
-            cvxpy.NonPos(ene_min[1:] - ene[1:] + reservations['E_lower'][:-1] - variables['ene_min_slack'][:-1]),
+            ene_target - ene_max[-1] + reservations['E_upper'][-1] - variables['ene_max_slack'][-1] <= 0,
+            ene[:-1] - ene_max[:-1] + reservations['E_upper'][:-1] - variables['ene_max_slack'][:-1] <= 0,
+            -ene_target + ene_min[-1] + reservations['E_lower'][-1] - variables['ene_min_slack'][-1] <= 0,
+            ene_min[1:] - ene[1:] + reservations['E_lower'][:-1] - variables['ene_min_slack'][:-1] <= 0,
 
             # Keep charge and discharge power levels within bounds
-            cvxpy.NonPos(-ch_max + ch - dis + reservations['D_min'] +
-                         reservations['C_max'] - variables['ch_max_slack']),
-            cvxpy.NonPos(-ch + dis + reservations['C_min'] +
-                         reservations['D_max'] - dis_max - variables['dis_max_slack']),
+            -ch_max + ch - dis + reservations['D_min'] + reservations['C_max'] - variables['ch_max_slack'] <= 0,
+            -ch + dis + reservations['C_min'] + reservations['D_max'] - dis_max - variables['dis_max_slack'] <= 0,
 
             # TODO: The following four constraints cause a DDPError warning in cvxpy version 1.1 and later
-            cvxpy.NonPos(ch - cvxpy.multiply(ch_max, on_c)),
-            cvxpy.NonPos(dis - cvxpy.multiply(dis_max, on_d)),
+            ch - cvxpy.multiply(ch_max, on_c) <= 0,
+            dis - cvxpy.multiply(dis_max, on_d) <= 0,
 
             # removing the band in between ch_min and dis_min that the battery will not operate in
-            cvxpy.NonPos(cvxpy.multiply(ch_min, on_c) - ch + reservations['C_min']),
-            cvxpy.NonPos(cvxpy.multiply(dis_min, on_d) - dis + reservations['D_min']),
+            cvxpy.multiply(ch_min, on_c) - ch + reservations['C_min'] <= 0,
+            cvxpy.multiply(dis_min, on_d) - dis + reservations['D_min'] <= 0,
         ]
 
         # For this test mask is all true and no filtering takes place
         days = mask.loc[mask].index.dayofyear
         constraints.extend(
-            cvxpy.NonPos(cvxpy.sum(dis[day_mask] * self.dt + cvxpy.pos(e_res[day_mask])) -
-                         self.ene_max_rated * self.daily_cycle_limit)
+            cvxpy.sum(dis[day_mask] * self.dt + cvxpy.pos(e_res[day_mask])) -
+            self.ene_max_rated * self.daily_cycle_limit <= 0
             for day_mask in (day == days for day in days.unique()))
         return constraints
 
@@ -223,7 +219,7 @@ class StorageSolver:
         bess = BESS(power_capacity, energy_capacity, self.rte,
                     self.daily_cycle_limit, self.dt, self.soc_target)
         constraints = [
-            cvxpy.NonPos(-variables['dis'] + variables['ch'] - generation),
+            -variables['dis'] + variables['ch'] - generation <= 0,
             *pv.objective_constraints(variables, mask),
             *bess.objective_constraints(variables, mask, reservations),
         ]
@@ -247,7 +243,6 @@ class StorageSolver:
         write_test_data("problem_data", problem_data)
 
         prob.solve(solver=CVXPY_SOLVER, verbose=CVXPY_VERBOSE)
-
         result_str = f'Optimization problem was {prob.status}'
         print(result_str)
 
@@ -267,3 +262,6 @@ if __name__ == "__main__":
     curve = pd.read_csv("curve.csv")
     solver = StorageSolver(cod, curve)
     solver.optimization_problem(0, data, data, 100, 400)
+
+
+
